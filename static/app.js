@@ -159,11 +159,16 @@ function syncActivityStream() {
   })();
 }
 function flushActivity() {
-  if (!ui.activityDirty || busy || document.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName) || $("details.menu[open]")) return;
+  const focused = document.activeElement;
+  const emptyComposer = focused?.matches?.('textarea[data-draft="run"]') && !focused.value;
+  // An empty composer is automatically focused after Send. It must not prevent
+  // completed runs from appearing. Keep deferring while a user edits a draft.
+  if (!ui.activityDirty || busy || document.hidden || (["INPUT", "TEXTAREA", "SELECT"].includes(focused?.tagName) && !emptyComposer) || $("details.menu[open]")) return;
   ui.activityDirty = false;
   const open = $$("details.quiet[open]").map(d => d.querySelector("summary")?.textContent);
   ui.stick = innerHeight + scrollY > document.body.scrollHeight - 200;
   sidebar(); render(); ui.stick = true;
+  if (emptyComposer) $("textarea[data-draft='run']")?.focus({ preventScroll: true });
   $$("details.quiet").forEach(d => { if (open.includes(d.querySelector("summary")?.textContent)) d.setAttribute("open", ""); });
 }
 document.addEventListener("focusout", () => setTimeout(flushActivity, 0));
@@ -906,7 +911,7 @@ document.addEventListener("input", e => {
   const t = e.target.dataset?.draft; if (!t) return;
   if (t === "forge-text") { forge.text = e.target.value; grow(e.target); syncCreate(); }
   if (t === "forge-name") { forge.name = e.target.value; forge.autoName = false; syncCreate(); }
-  if (t === "run") { ui.drafts[e.target.dataset.id] = e.target.value; grow(e.target); }
+  if (t === "run") { ui.drafts[e.target.dataset.id] = e.target.value; grow(e.target); if (!e.target.value) flushActivity(); }
   if (t === "repository") ui.repositories[e.target.dataset.id] = e.target.value;
   if (t === "new-tool-name") ui.newTool.name = e.target.value;
   if (t === "new-tool-description") ui.newTool.description = e.target.value;
@@ -1057,7 +1062,7 @@ async function authenticate() {
         const response = await fetch(creating ? "/api/auth/signup" : "/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         const session = await response.json();
         if (!response.ok) throw Error(session.error?.message || "Sign-in failed.");
-        csrfToken = session.csrf_token; user = session.user.id; form.reset(); document.body.classList.remove("auth-screen"); $("#side").hidden = false; resolve();
+        csrfToken = session.csrf_token; user = session.user.id; history.replaceState(null, "", "#/new"); form.reset(); document.body.classList.remove("auth-screen"); $("#side").hidden = false; resolve();
       } catch (error) { $("#login-error").textContent = error.message; button.disabled = false; }
     });
   });
@@ -1066,7 +1071,7 @@ async function authenticate() {
 /* ---------- boot and polling ---------- */
 (async () => {
   startSky();
-  try { await authenticate(); await load(); authReady = true; if (route().name === "files") loadFiles(); if (!location.hash && S.agents.length) location.replace("#/agent/" + S.agents[0].id); render(); enter(); }
+  try { await authenticate(); await load(); authReady = true; if (route().name === "files") loadFiles(); if (!location.hash) history.replaceState(null, "", "#/new"); render(); enter(); }
   catch (e) { $("#view").innerHTML = `<div class="center-msg"><h2>Can't reach the server</h2><p class="note">Start it with ./run-arcade.command, then reload.</p></div>`; toast(e.message, true); }
 })();
 
