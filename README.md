@@ -1,6 +1,102 @@
-# Hire an Agent
+# ORBIT
 
-HackTX agent platform: **describe a job, reuse approved capabilities, create a scoped agent, and review its results.** Includes a visual workspace, company marketplace, durable execution history, and optional per-action review.
+**AI agents with a job, a manager, and a clear set of permissions.**
+
+Built at HackTX by Amol, Tarun, Shaun, and Pavan. Orbit gives employees a workspace to build specialized agents, while managers approve their scope and see who created them, how they perform, and how the team uses them.
+
+Employees choose capabilities and a playbook, name their agent, and select its model. Managers confirm new agents before they work. Agents create deliverables inside the workspace, and teams can reuse capabilities and agent templates through the company Library.
+
+## Product tour
+
+### Build an agent for a specific job
+
+Choose tools such as slides, documents, data analysis, public web research, meeting invites, email drafts, and task planning. Personas provide reusable instructions. The chosen model stays fixed for that agent.
+
+![Agent builder with selected tools, persona instructions, and model selection](docs/images/agent-builder.webp)
+
+### Inspect the work, not just the answer
+
+Conversations retain generated output and execution steps. Preview slide decks, inspect saved artifacts, and collect downloads in Files. Workspace tools save content rather than sending messages or booking meetings.
+
+![A real generated slide deck inside an agent conversation](docs/images/agent-output.webp)
+
+### See who owns each agent
+
+Managers have a dedicated Employees view. Their sidebar separates their own agents from team agents grouped by creator. Employee summaries expand to show activity and owned agents.
+
+![Manager employee overview and agents grouped by creator in the sidebar](docs/images/employee-overview.webp)
+
+![Expanded employee summary showing task counts, provider-reported token usage, and agent quality scores](docs/images/employee-usage.webp)
+
+Completed tasks are distinct from positively reviewed results. Leaderboard rankings require minimum review counts; token totals reflect provider-reported usage, not dollar costs or measured time savings.
+
+### Share capabilities across the company
+
+The Library holds reusable tools, their playbooks, and shared agent templates. Optional GitHub reading uses a server-managed connection with a restricted read-only tool allowlist.
+
+![Capability Library with tools, playbooks, and reuse counts](docs/images/capability-library.webp)
+
+Screenshots show the local hackathon workspace with sample activity. Accounts and stored activity depend on the database used by each deployment.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    Employee[Employee / Developer] --> UI
+    Manager[Manager / Admin] --> UI
+
+    subgraph Browser[Browser]
+        UI[HTML, CSS, vanilla JavaScript]
+    end
+
+    UI -->|JSON over HTTPS| API
+    API -->|Authenticated SSE activity| UI
+
+    subgraph Backend[Python backend · one application process]
+        API[FastAPI + Pydantic request validation]
+        Auth[Cookie sessions + CSRF validation]
+        Domain[Agent specs, role checks, approvals, Library, reports]
+        Runtime[Background execution runtime]
+        Resolve[Capability allowlist + connection resolver]
+        MCP[Bundled MCP client / server]
+        API --> Auth
+        Auth --> Domain
+        Domain -->|Queue durable runs| Runtime
+        Runtime -->|Validate each proposed tool call| Resolve
+        Resolve --> MCP
+    end
+
+    Domain <--> DB[(SQLite)]
+    Runtime <--> DB
+    MCP -->|Persist local results| DB
+    Runtime <-->|Reasoning + tool proposals| Models[Meta Model API / optional Gemini]
+    Resolve -->|Restricted read-only MCP| GitHub[Optional GitHub hosted MCP]
+    MCP -->|Validated public URLs| Web[Public web pages]
+```
+
+### How a task runs
+
+1. The browser authenticates with an HttpOnly session cookie. The backend checks the actor’s role, organization, and department access.
+2. A builder submits an agent specification. Under the default policy, its assigned manager confirms the exact model and capabilities before activation. Optional per-action policy adds review before individual tool execution.
+3. Starting a task creates a durable run and conversation record in SQLite. The background runtime calls the configured model with the agent’s instructions and permitted tool schemas.
+4. The model proposes tool calls. Orbit validates their arguments, current permissions, approved scope, and connections before executing them. The model itself does not receive database credentials or API keys.
+5. Tool results, execution steps, approvals, outcomes, and artifacts persist in SQLite. Authenticated SSE updates the open conversation. Manager reports summarize actual records.
+
+The deployment runs one application process per SQLite database. Durable storage must persist the database across deployments. Provider requests are synchronous inside background execution threads; SSE streams activity snapshots, not model tokens. See [operations](docs/OPERATIONS.md) and [implementation details](docs/IMPLEMENTATION.md) for recovery behavior and limits.
+
+### Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | HTML, CSS, vanilla JavaScript, Canvas |
+| API | Python, FastAPI, Pydantic, Uvicorn |
+| Persistence | SQLite |
+| AI | Meta Model API; optional Gemini adapter |
+| Tools | MCP, bundled workspace tools, optional GitHub hosted MCP |
+| Authentication | scrypt password hashes, cookie sessions, CSRF checks |
+| Live activity | Server-Sent Events |
+| Deployment | Docker, Render |
+| Verification | Python unittest, JavaScript contract checks, GitHub Actions |
 
 ## Run
 
@@ -15,7 +111,7 @@ python server.py
 
 Open **http://localhost:8000**. Database state persists in `data/workforce.sqlite3`. Start one application process per database. Use the VS Code `Run backend` task or run the command from its terminal.
 
-Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. All 51 API operations are explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
+Interactive API docs: **http://localhost:8000/docs**. OpenAPI JSON: **http://localhost:8000/openapi.json**. API operations use explicit FastAPI routes grouped into domain routers, with strict Pydantic request validation and documented headers. Swagger assets load from the standard jsDelivr CDN; the workbench has no CDN dependency.
 
 The server binds to localhost. Set `AUTH_MODE=password` after provisioning an account with `scripts/create_user.py` for real username/password sign-in. Without that setting, the identity selector remains a **local development impersonation facility**. Production mode refuses development authentication. See [backend operations](docs/OPERATIONS.md) for setup, recovery, limits and deployment prerequisites.
 
@@ -50,22 +146,14 @@ An optional Gemini adapter is available through `GEMINI_API_KEY` and `GEMINI_MOD
 
 ## Try the workflow
 
-1. Keep identity **Pavan**, Support department, Pavan as manager, and demo mode.
-2. Open **My agents → Hire agent**, describe a support triage job, and review the suggested setup. Confirm the hire.
-3. Start the default task. The Intern pauses **before** calling the first tool.
-4. Open **Inbox**, inspect the exact arguments and evidence, and approve. Repeat for document search and draft creation. These are distinct actions with distinct approvals.
-5. Open the agent from **My agents**. Results appear under **Task & result**, with history and metrics under **Activity & performance**. Draft creation only saves a local draft; no message is sent.
-6. In the agent’s **Settings**, promote it to Associate with a reason. On the next run, reads proceed automatically but draft creation still requires approval.
-7. Publish the agent from **Library → Share with your team**, then install it from **Agent templates**. The copy starts Intern with no bound connections. Select the installed agent and validate/activate its local connections as its manager.
-8. Record a task outcome separately from approving actions. Performance includes explicit denominators and is available within each agent’s profile.
+1. Create a password account with `python scripts/create_user.py --username pavan --actor pavan`, set `AUTH_MODE=password` in `.env`, and restart the backend. The script prompts privately for a password.
+2. For the local team role setup, run `python scripts/configure_team.py`. Pavan becomes a developer, Shaun becomes a manager/developer, and Pavan-managed agents transfer to Shaun. Create Shaun’s password account separately with `python scripts/create_user.py --username shaun --actor shaun`.
+3. Sign in as an employee. Select capabilities, choose a persona or write instructions, enter a name, choose an enabled model, and create the agent.
+4. Sign in as its assigned manager and open **Approvals** to inspect and confirm the proposed agent. Default agent-level approval allows its scoped tasks to proceed after confirmation.
+5. Return as the employee and run a task. Inspect the result and execution steps, continue the conversation, or find saved output in **Files**.
+6. As a manager, open **Employees** and expand an employee to inspect ownership and usage. Use **Leaderboard** for reviewed result quality and measured reuse, and **Library** for reusable capabilities and templates.
 
-For an automated HTTP walkthrough against a running server:
-
-```sh
-python scripts/demo.py
-```
-
-This creates labeled demo agents, runs, approvals and listings in the local database.
+Local accounts and artifacts live in the local database; pulling Git changes does not copy passwords or team activity between computers. See [API documentation](docs/API.md) for the optional per-action approval policy.
 
 ## Tests
 
